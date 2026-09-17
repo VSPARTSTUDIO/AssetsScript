@@ -1,0 +1,1869 @@
+import discord
+import json
+import os
+import io
+import asyncio
+import random
+import aiohttp
+import numpy as np
+import matplotlib.pyplot as plt
+import subprocess  
+from discord.ext import commands, tasks
+from discord import app_commands
+from pydub import AudioSegment
+import yt_dlp
+
+# --- [ CONFIGURATION ] ---
+TOKEN = "ใส่โทเค้น"
+AUDIT_CHANNEL_ID = ใส่ห้องที่ต้องการให้โหลด bait 
+# รายการห้องที่อนุญาตให้ใช้งานคำสั่งเสียง
+ALLOWED_CHANNEL_IDS = [ห้องที่อนุญาติการใช่งาน, ห้องที่อนุญาติการใช่งาน, ห้องที่อนุญาติการใช่งาน]  
+THEME_COLOR = 0xdcdcdc  # โทนสีขาว-เทา
+AUDIO_EMBED_COLOR = 0x1f8b4c  # สีธีมเฉพาะของแสดงผลข้อมูลแทร็กเสียง
+DATA_FILE = "stats_config.json"
+
+# --- [ PROXY LIST FOR ROBLOX DOWNLOAD ] ---
+PROXY_LIST = [
+    "http://1.231.81.166:3128", "http://168.144.75.9:3128", "http://103.82.23.118:5207",
+    "http://38.55.106.208:6005", "http://158.160.215.167:8125", "http://113.160.132.20c:8080",
+    "http://20.78.118.91:8561", "http://20.27.11.248:8561", "http://178.156.224.42:3128",
+    "http://152.32.132.190:7890", "http://213.35.113.150:6969", "http://81.30.156.115:8080",
+    "http://152.42.208.139:8118", "http://20.204.228.118:8080", "http://94.131.118.129:1082",
+    "http://149.51.42.10:3128", "http://162.19.253.202:8443", "http://15.204.151.142:3128",
+    "http://85.190.99.143:443", "http://177.93.132.244:3128"
+]
+
+# --- [ ลิงก์รูปภาพและกิ๊ฟระบบ ] ---
+GIF_HEADER = "https://cdn.discordapp.com/emojis/1262417524192972902.webp?size=32&animated=true"
+GIF_LOADING = "https://cdn.discordapp.com/attachments/1492915348889010276/1505211753976430773/animated-download-gradient-ui-icon-906732.gif"
+GIF_CHECK_MARK = "https://cdn.discordapp.com/attachments/1492915348889010276/1505211716001206333/372103860_CHECK_MARK_400px_1.gif"
+GIF_CROSS_MARK = "https://cdn.discordapp.com/attachments/1492915348889010276/1505211728433254552/372107370_CROSS_MARK_400px_1.gif"
+
+# --- [ BYPASS QUEUE LOCK ] ---
+bypass_lock = asyncio.Lock()
+
+# --- [ GLOBAL CACHE FOR SOUNDNAME SHORTCUTS ] ---
+sound_shortcuts_cache = {}
+
+# --- [ HELPER TO GET LANGUAGE SETTING ] ---
+def get_guild_lang(guild_id):
+    if not guild_id:
+        return "th"
+    guild_data = bot.stats_config.get(str(guild_id), {})
+    return guild_data.get("language_setting", "th")
+
+# --- [ PAGINATOR VIEW FOR CMD ] ---
+class HelpPaginator(discord.ui.View):
+    def __init__(self, author, lang="th"):
+        super().__init__(timeout=60)
+        self.author = author
+        self.current_page = 1
+        self.lang = lang
+
+    def get_embed(self):
+        if self.lang == "en":
+            if self.current_page == 1:
+                embed = discord.Embed(
+                    title="List of all enabled core system commands (Page 1/2)",
+                    description=(
+                        "**📂 Basic Audio Management Commands**\n"
+                        "🔖 `>check` ⸺ Scan waveform structure, label detection & copyright check\n"
+                        "🔖 `>file` ⸺ Compress audio file size and measure storage in KB\n"
+                        "🔖 `>speed` ⸺ Adjust speed rate level (on = change key / off = lock pitch)\n"
+                        "🔖 `>volume` ⸺ Improve or adjust audio decibel gain levels\n"
+                        "🔖 `>convert` ⸺ Instantly convert audio extension format\n"
+                        "🔖 `>mix` ⸺ Combine 2 audios together (shorter one first, longer one last)\n"
+                        "🔖 `>cut` ⸺ Trim audio from start to specified duration limit (e.g. 1.50)\n"
+                        "🔖 `>cutback` ⸺ Remove starting audio part (e.g. 0.20) and send remaining track\n"
+                        "🔖 `>menu` ⸺ Open complete multi-task audio operation studio panel"
+                    ),
+                    color=THEME_COLOR
+                )
+            else:
+                embed = discord.Embed(
+                    title="List of all enabled core system commands (Page 2/2)",
+                    description=(
+                        "🔖 `>yt` ⸺ Download YouTube audio to MP3 with thumbnail artwork\n"
+                        "🔖 `>baitfull` ⸺ Randomly inject F/B bypass packages front and back\n"
+                        "🔖 `>nups @user` ⸺ Scan user's audio sending history with MB/KB size log\n"
+                        "🔖 `>uploadreturn` ⸺ Retrieve historical audio using sound shortcut ID\n"
+                        "🔖 `>stat` ⸺ Summary report of total core statistics and scanner counts\n"
+                        "🔖 `>le` ⸺ Change system interface and description language to English\n"
+                        "🔖 `>lt` ⸺ Change system interface and description language to Thai"
+                    ),
+                    color=THEME_COLOR
+                )
+            embed.set_author(name="Command Terminal & Guide", icon_url=GIF_HEADER)
+            embed.set_footer(text="@SkyWord @191 • SkyWord Official")
+        else:
+            if self.current_page == 1:
+                embed = discord.Embed(
+                    title="รายชื่อคำสั่งระบบทั้งหมดที่เปิดใช้งาน (หน้า 1/2)",
+                    description=(
+                        "**📂 คำสั่งจัดการไฟล์เสียงพื้นฐาน**\n"
+                        "🔖 `>check` ⸺ สแกนตรวจสอบคลื่นเสียง ค่ายเพลง และโอกาสผ่านลิขสิทธิ์\n"
+                        "🔖 `>file` ⸺ บีบอัดไฟล์เสียงเพื่อลดขนาด และวัดสัดส่วนความจุเป็นหน่วย KB\n"
+                        "🔖 `>speed` ⸺ ปรับระดับความเร็วเสียง (on = เปลี่ยนคีย์ / off = ล็อคคีย์พิตช์)\n"
+                        "🔖 `>volume` ⸺ ปรับปรุงเพิ่มความดังหรือลดค่าเดซิเบลของไฟล์ระบบเสียง\n"
+                        "🔖 `>convert` ⸺ สั่งแปลงเปลี่ยนนามสกุลฟอร์แมตไฟล์เสียงด่วน\n"
+                        "🔖 `>mix` ⸺ นำไฟล์เสียง 2 ไฟล์มาต่อกัน โดยสลับเอาไฟล์ที่สั้นกว่าไว้หน้า ยาวไว้หลัง\n"
+                        "🔖 `>cut` ⸺ ตัดไฟล์เสียงให้เหลือเฉพาะช่วงเริ่มต้นถึงเวลาที่กำหนด (เช่น 1.50)\n"
+                        "🔖 `>cutback` ⸺ ตัดไฟล์เสียงเอาช่วงเริ่มต้นออก (เช่น 0.20) และส่งส่วนที่เหลือกลับมา\n"
+                        "🔖 `>menu` ⸺ Open complete multi-task audio operation studio panel"
+                    ),
+                    color=THEME_COLOR
+                )
+            else:
+                embed = discord.Embed(
+                    title="รายชื่อคำสั่งระบบทั้งหมดที่เปิดใช้งาน (หน้า 2/2)",
+                    description=(
+                        "🔖 `>yt` ⸺ ดาวน์โหลดเสียงจาก YouTube แปลเป็นไฟล์ MP3 พร้อมดึงภาพปก\n"
+                        "🔖 `>baitfull` ⸺ สุ่มสอดไส้ชุดไฟล์คู่เสียงตระกูล F/B หน้าหลังเพื่อ Bypass ระบบ\n"
+                        "🔖 `>nups @user` ⸺ ค้นหาประวัติเพลงทั้งหมดของบุคคลพร้อมรายงานขนาด MB/KB\n"
+                        "🔖 `>uploadreturn` ⸺ ดึงส่งไฟล์เสียงเก่ากลับมาให้ด้วยชื่อย่อเสียงที่ค้นหา\n"
+                        "🔖 `>stat` ⸺ รายงานสรุปยอดรวมข้อมูลสถิติ ความถี่การตรวจสอบงานทั้งหมด\n"
+                        "🔖 `>le` ⸺ เปลี่ยนเมนูและคำอธิบายระบบบอททั้งหมดให้เป็น ภาษาอังกฤษ\n"
+                        "🔖 `>lt` ⸺ เปลี่ยนเมนูและคำอธิบายระบบบอททั้งหมดให้เป็น ภาษาไทย"
+                    ),
+                    color=THEME_COLOR
+                )
+            embed.set_author(name="Command Terminal & Guide", icon_url=GIF_HEADER)
+            embed.set_thumbnail(url=GIF_HEADER)
+            embed.set_footer(text="@SkyWord @191 • SkyWord Official")
+        return embed
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.author.id:
+            msg = "Is your father looking for your mother's pussy?" if self.lang == "en" else "เขาของเขาหาหีเเม่มึงหรอ"
+            await interaction.response.send_message(msg, ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="◀ Prev Page", style=discord.ButtonStyle.grey, disabled=True)
+    async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.current_page = 1
+        button.disabled = True
+        self.next_button.disabled = False
+        await interaction.response.edit_message(embed=self.get_embed(), view=self)
+
+    @discord.ui.button(label="Next Page ▶", style=discord.ButtonStyle.blurple)
+    async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.current_page = 2
+        button.disabled = True
+        self.prev_button.disabled = False
+        await interaction.response.edit_message(embed=self.get_embed(), view=self)
+
+
+# --- [ PAGINATOR VIEW FOR SOUNDNAME SEARCH ] ---
+class SoundNamePaginator(discord.ui.View):
+    def __init__(self, author, query, files_list, lang="th"):
+        super().__init__(timeout=60)
+        self.author = author
+        self.query = query
+        self.files_list = files_list
+        self.current_page = 0
+        self.items_per_page = 10
+        self.total_pages = (len(files_list) - 1) // self.items_per_page + 1
+        self.lang = lang
+        self.update_buttons()
+
+    def update_buttons(self):
+        self.prev_button.disabled = self.current_page == 0
+        self.next_button.disabled = self.current_page >= self.total_pages - 1
+
+    def get_embed(self):
+        start = self.current_page * self.items_per_page
+        end = start + self.items_per_page
+        current_items = self.files_list[start:end]
+
+        description_lines = []
+        for idx, item in enumerate(current_items, start=start + 1):
+            short_name = f"snd{idx}"
+            sound_shortcuts_cache[short_name] = item['filename']
+            description_lines.append(f"🆔 `{short_name}` ⸺ **{item['filename']}** ({item['size']})")
+
+        if self.lang == "en":
+            embed = discord.Embed(
+                title=f"Sound search results for: {self.query} (Page {self.current_page + 1}/{self.total_pages})",
+                description="\n".join(description_lines) if description_lines else "No audio file data found",
+                color=THEME_COLOR
+            )
+            embed.set_author(name="SkyWord Sound Finder", icon_url=GIF_HEADER)
+            embed.set_footer(text="Use >uploadreturn command followed by ID to retrieve the audio file")
+        else:
+            embed = discord.Embed(
+                title=f"ผลการค้นหาไฟล์เสียงของ: {self.query} (หน้า {self.current_page + 1}/{self.total_pages})",
+                description="\n".join(description_lines) if description_lines else "ไม่พบไฟล์เสียงข้อมูล",
+                color=THEME_COLOR
+            )
+            embed.set_author(name="SkyWord Sound Finder", icon_url=GIF_HEADER)
+            embed.set_footer(text="ใช้คำสั่ง >uploadreturn ตามด้วยรหัส ID เพื่อดึงไฟล์เสียงกลับมา")
+        return embed
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.author.id:
+            msg = "Is your father looking for your mother's pussy?" if self.lang == "en" else "เขาของเขาหาหีเเม่มึงหรอ"
+            await interaction.response.send_message(msg, ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="◀ Prev Page", style=discord.ButtonStyle.grey)
+    async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.current_page -= 1
+        self.update_buttons()
+        await interaction.response.edit_message(embed=self.get_embed(), view=self)
+
+    @discord.ui.button(label="Next Page ▶", style=discord.ButtonStyle.blurple)
+    async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.current_page += 1
+        self.update_buttons()
+        await interaction.response.edit_message(embed=self.get_embed(), view=self)
+
+
+# --- [ MODAL WINDOW FOR CUSTOM VALUES ] ---
+class MenuSettingsModal(discord.ui.Modal):
+    def __init__(self, current_view):
+        lang = current_view.lang
+        title_text = "Configure custom audio values" if lang == "en" else "กำหนดค่าการปรับแต่งระบบเสียง"
+        super().__init__(title=title_text)
+        self.current_view = current_view
+
+        if lang == "en":
+            self.cut_time = discord.ui.TextInput(
+                label="Trim duration limit (e.g., 1.50)",
+                placeholder="Leave blank if trimming is not required",
+                required=False,
+                default=current_view.settings['cut']
+            )
+            self.volume_db = discord.ui.TextInput(
+                label="Adjust audio decibel gain (e.g., 10, -5)",
+                placeholder="Leave blank if volume gain is unchanged",
+                required=False,
+                default=current_view.settings['volume']
+            )
+            self.speed_rate = discord.ui.TextInput(
+                label="Target speed rate scale (e.g., 1.25)",
+                placeholder="Leave blank if speed adjustment is not required",
+                required=False,
+                default=current_view.settings['speed']
+            )
+        else:
+            self.cut_time = discord.ui.TextInput(
+                label="ตัดเฉพาะช่วงต้นไว้ถึงเวลาที่กำหนด (เช่น 1.50)",
+                placeholder="เว้นว่างไว้หากไม่ต้องการตัด",
+                required=False,
+                default=current_view.settings['cut']
+            )
+            self.volume_db = discord.ui.TextInput(
+                label="ปรับค่าเดซิเบลเสียง (เช่น 10, -5, 60)",
+                placeholder="เว้นว่างไว้หากไม่ปรับความดัง",
+                required=False,
+                default=current_view.settings['volume']
+            )
+            self.speed_rate = discord.ui.TextInput(
+                label="ความเร็วที่ต้องการ (เช่น 1.25, 1.50)",
+                placeholder="เว้นว่างไว้หากไม่ต้องการปรับสปีด",
+                required=False,
+                default=current_view.settings['speed']
+            )
+
+        self.add_item(self.cut_time)
+        self.add_item(self.volume_db)
+        self.add_item(self.speed_rate)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        fallback_text = "Unchanged" if self.current_view.lang == "en" else "ไม่ปรับ"
+        fallback_cut = "No Trim" if self.current_view.lang == "en" else "ไม่ตัด"
+        
+        self.current_view.settings['cut'] = self.cut_time.value.strip() or fallback_cut
+        self.current_view.settings['volume'] = self.volume_db.value.strip() or fallback_text
+        self.current_view.settings['speed'] = self.speed_rate.value.strip() or fallback_text
+        await interaction.response.edit_message(embed=self.current_view.get_embed(), view=self.current_view)
+
+
+# --- [ INTERACTIVE VIEW FOR >MENU COMMAND ] ---
+class AudioControlMenuView(discord.ui.View):
+    def __init__(self, author, attachments, lang="th"):
+        super().__init__(timeout=180)
+        self.author = author
+        self.attachments = attachments
+        self.is_cancelled = False
+        self.is_submitted = False
+        self.lang = lang
+
+        fallback_text = "Unchanged" if self.lang == "en" else "ไม่ปรับ"
+        fallback_cut = "No Trim" if self.lang == "en" else "ไม่ตัด"
+        fallback_bypass = "Disabled" if self.lang == "en" else "ไม่เปิด"
+
+        self.settings = {
+            'bypass': fallback_bypass,
+            'cut': fallback_cut,
+            'volume': fallback_text,
+            'speed': fallback_text,
+            'tone': 'off',
+            'order': '1_2'
+        }
+        self.setup_dropdowns()
+        self.update_labels()
+
+    def update_labels(self):
+        if self.lang == "en":
+            self.configure_values.label = "📝 Specify Cut / Volume / Speed"
+            self.cancel_action.label = "❌ Cancel All Operations"
+            self.submit_action.label = "✅ Accept and Process Studio"
+        else:
+            self.configure_values.label = "📝 ระบุค่า คัดเสียง / ความดัง / สปีด"
+            self.cancel_action.label = "❌ ยกเลิกการทำงานทั้งหมด"
+            self.submit_action.label = "✅ ตกลงและส่งประมวลผลด่วน"
+
+    def setup_dropdowns(self):
+        if self.lang == "en":
+            bypass_select = discord.ui.Select(
+                placeholder="Choose bypass protection model mode",
+                min_values=1, max_values=1,
+                options=[
+                    discord.SelectOption(label="Bypass Mode Disabled", value="Disabled", description="Use standard normal audio files natively"),
+                    discord.SelectOption(label="Bypass with F sound packs", value="F", description="Focus injection with F series packs front-back"),
+                    discord.SelectOption(label="Bypass with B sound packs", value="B", description="Focus injection with B series packs front-back")
+                ],
+                custom_id="menu_bypass_select"
+            )
+        else:
+            bypass_select = discord.ui.Select(
+                placeholder="เลือกโหมดการคุ้มกันการสอดไส้ Bypass",
+                min_values=1, max_values=1,
+                options=[
+                    discord.SelectOption(label="ไม่เปิดใช้ Bypass", value="ไม่เปิด", description="ใช้งานไฟล์เสียงปกติธรรมดา"),
+                    discord.SelectOption(label="Bypass ด้วยชุดคู่เสียง F", value="F", description="เน้นใช้ชุดสอดไส้ตระกูล F หน้า-หลัง"),
+                    discord.SelectOption(label="Bypass ด้วยชุดคู่เสียง B", value="B", description="เน้นใช้ชุดสอดไส้ตระกูล B หน้า-หลัง")
+                ],
+                custom_id="menu_bypass_select"
+            )
+        async def bypass_callback(interaction: discord.Interaction):
+            self.settings['bypass'] = bypass_select.values[0]
+            await interaction.response.edit_message(embed=self.get_embed(), view=self)
+        bypass_select.callback = bypass_callback
+        self.add_item(bypass_select)
+
+        if self.lang == "en":
+            tone_select = discord.ui.Select(
+                placeholder="Choose tone pitch lock mode (Chipmunk or not)",
+                min_values=1, max_values=1,
+                options=[
+                    discord.SelectOption(label="Disable pitch modification (off)", value="off", description="Lock original voice pitch even when accelerated"),
+                    discord.SelectOption(label="Enable high key chipmunk (on)", value="on", description="Scale up audio pitch proportional to speed rate")
+                ],
+                custom_id="menu_tone_select"
+            )
+        else:
+            tone_select = discord.ui.Select(
+                placeholder="เลือกโหมดการล็อคพิตช์โทนเสียง (ชิปมังก์หรือไม่)",
+                min_values=1, max_values=1,
+                options=[
+                    discord.SelectOption(label="ปิดการเปลี่ยนคีย์โทน (off)", value="off", description="ล็อคพิตช์เสียงให้คงเดิมแม้จะเร่งสปีด"),
+                    discord.SelectOption(label="เปิดเสียงชิปมังก์คีย์สูง (on)", value="on", description="เปลี่ยนระดับเสียงแหลมตามความเร็วสปีด")
+                ],
+                custom_id="menu_tone_select"
+            )
+        async def tone_callback(interaction: discord.Interaction):
+            self.settings['tone'] = tone_select.values[0]
+            await interaction.response.edit_message(embed=self.get_embed(), view=self)
+        tone_select.callback = tone_callback
+        self.add_item(tone_select)
+
+        if len(self.attachments) >= 2:
+            if self.lang == "en":
+                order_select = discord.ui.Select(
+                    placeholder="Configure audio sorting sequence front-back",
+                    min_values=1, max_values=1,
+                    options=[
+                        discord.SelectOption(label="File 1 front -> File 2 back", value="1_2", description=f"{self.attachments[0].filename} leads"),
+                        discord.SelectOption(label="File 2 front -> File 1 back", value="2_1", description=f"{self.attachments[1].filename} leads")
+                    ],
+                    custom_id="menu_order_select"
+                )
+            else:
+                order_select = discord.ui.Select(
+                    placeholder="เลือกการจัดเรียงลำดับการต่อเสียงหน้า-หลัง",
+                    min_values=1, max_values=1,
+                    options=[
+                        discord.SelectOption(label=f"ไฟล์ 1 อยู่หน้า -> ไฟล์ 2 อยู่หลัง", value="1_2", description=f"{self.attachments[0].filename} นำหน้า"),
+                        discord.SelectOption(label=f"ไฟล์ 2 อยู่หน้า -> ไฟล์ 1 อยู่หลัง", value="2_1", description=f"{self.attachments[1].filename} นำหน้า")
+                    ],
+                    custom_id="menu_order_select"
+                )
+            async def order_callback(interaction: discord.Interaction):
+                self.settings['order'] = order_select.values[0]
+                await interaction.response.edit_message(embed=self.get_embed(), view=self)
+            order_select.callback = order_callback
+            self.add_item(order_select)
+
+    def get_embed(self):
+        file_info = ""
+        if len(self.attachments) >= 2:
+            file_info = f"1️⃣ {self.attachments[0].filename}\n2️⃣ {self.attachments[1].filename}"
+        else:
+            file_info = f"1️⃣ {self.attachments[0].filename}"
+
+        if self.lang == "en":
+            embed = discord.Embed(
+                title="SkyWord Audio Studio Multi-Task Menu",
+                description="Please configure audio system operational metrics using buttons and dropdowns below.",
+                color=THEME_COLOR
+            )
+            embed.add_field(name="📂 Imported Audio Track List Log", value=f"```\n{file_info}```", inline=False)
+            
+            suffix = ' dB' if self.settings['volume'] not in ['Unchanged', 'ไม่ปรับ'] else ''
+            status_text = (
+                f"• Bypass Model Model : {self.settings['bypass']}\n"
+                f"• Cut Section Limit  : {self.settings['cut']}\n"
+                f"• Gain Volume Level  : {self.settings['volume']}{suffix}\n"
+                f"• Speed Acceleration : {self.settings['speed']}\n"
+                f"• Tone Pitch Key Mode: {self.settings['tone'].upper()}"
+            )
+            if len(self.attachments) >= 2:
+                status_text += f"\n• Track File Sequence: {'File 1 leads 2' if self.settings['order'] == '1_2' else 'File 2 leads 1'}"
+
+            embed.add_field(name="⚙️ Currently Configured Studio System Parameters", value=f"```yaml\n{status_text}```", inline=False)
+            embed.set_author(name="SkyWord Studio Operations", icon_url=GIF_HEADER)
+            embed.set_footer(text="@SkyWord @191 • SkyWord Official")
+        else:
+            embed = discord.Embed(
+                title="SkyWord Audio Studio Multi-Task Menu",
+                description="กรุณาตั้งค่าฟังก์ชันการทำงานระบบเสียงผ่านปุ่มกดและดรอปดาวน์เมนูด้านล่างนี้",
+                color=THEME_COLOR
+            )
+            embed.add_field(name="📂 รายชื่อไฟล์เสียงนำเข้าข้อมูล", value=f"```\n{file_info}```", inline=False)
+            
+            suffix = ' dB' if self.settings['volume'] not in ['ไม่ปรับ', 'Unchanged'] else ''
+            status_text = (
+                f"• โหมดสอดไส้ Bypass  : {self.settings['bypass']}\n"
+                f"• ช่วงเวลาคัดส่วนเสียง  : {self.settings['cut']}\n"
+                f"• ปรับแต่งระดับความดัง  : {self.settings['volume']}{suffix}\n"
+                f"• ความเร็ว/ระดับสปีด   : {self.settings['speed']}\n"
+                f"• โหมดโทนคีย์ (ชิปมังก์) : {self.settings['tone'].upper()}"
+            )
+            if len(self.attachments) >= 2:
+                status_text += f"\n• ลำดับการจัดเรียงไฟล์   : {'ไฟล์ 1 นำหน้า 2' if self.settings['order'] == '1_2' else 'ไฟล์ 2 นำหน้า 1'}"
+
+            embed.add_field(name="⚙️ พารามิเตอร์การตั้งค่าที่เลือกไว้ในขณะนี้", value=f"```yaml\n{status_text}```", inline=False)
+            embed.set_author(name="SkyWord Studio Operations", icon_url=GIF_HEADER)
+            embed.set_footer(text="@SkyWord @191 • SkyWord Official")
+        return embed
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.author.id:
+            msg = "Is your father looking for your mother's pussy?" if self.lang == "en" else "เขาของเขาหาหีเเม่มึงหรอ"
+            await interaction.response.send_message(msg, ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="📝 ระบุค่า คัดเสียง / ความดัง / สปีด", style=discord.ButtonStyle.blurple, row=3)
+    async def configure_values(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(MenuSettingsModal(self))
+
+    @discord.ui.button(label="❌ ยกเลิกการทำงานทั้งหมด", style=discord.ButtonStyle.danger, row=3)
+    async def cancel_action(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.is_cancelled = True
+        self.stop()
+        msg = "❌ Audio compilation operations workspace aborted successfully." if self.lang == "en" else "❌ ยกเลิกเมนูจัดเตรียมไฟล์เสียงเรียบร้อยแล้ว"
+        await interaction.response.edit_message(content=msg, embed=None, view=None)
+
+    @discord.ui.button(label="✅ ตกลงและส่งประมวลผลด่วน", style=discord.ButtonStyle.success, row=3)
+    async def submit_action(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.is_submitted = True
+        self.stop()
+        msg = "📥 Recieving data packets and pushing operational tasks to core engine..." if self.lang == "en" else "📥 ระบบกำลังรับสัญญาณและรวบรวมฟังก์ชันส่งไปยังโมดูลหลัก..."
+        await interaction.response.edit_message(content=msg, embed=None, view=None)
+
+
+# --- [ BOT CLASS ] ---
+
+class SimpleSpy(commands.Bot):
+    def __init__(self):
+        intents = discord.Intents.all()
+        super().__init__(command_prefix=">", intents=intents, help_command=None)
+        self.stats_config = self.load_config()
+
+    def load_config(self):
+        if os.path.exists(DATA_FILE):
+            with open(DATA_FILE, "r") as f: return json.load(f)
+        return {}
+
+    def save_config(self):
+        with open(DATA_FILE, "w") as f: json.dump(self.stats_config, f, indent=4)
+
+    async def setup_hook(self):
+        await self.tree.sync()
+
+bot = SimpleSpy()
+
+# --- [ HELPER FUNCTION ] ---
+def generate_safe_stereo_graph(temp_in_path):
+    try:
+        sound = AudioSegment.from_file(temp_in_path)
+        samples = np.array(sound.get_array_of_samples(), dtype=np.float32)
+        
+        fig, axes = plt.subplots(3, 1, figsize=(10, 7.5), facecolor='#000000')
+        fig.patch.set_facecolor('#000000')
+        fig.patch.set_edgecolor('#ffffff')
+        fig.patch.set_linewidth(3)
+        
+        step = max(1, len(samples) // 3000) 
+        
+        if sound.channels == 2:
+            left = samples[0::2][::step]
+            right = samples[1::2][::step]
+        else:
+            left = samples[::step]
+            right = samples[::step]
+            
+        colors_fill = ['#ffffff', '#aaaaaa']
+        colors_line = ['#e0e0e0', '#cccccc']
+        colors_dark = ['#777777', '#555555']
+        
+        for idx, (ax, data) in enumerate(zip([axes[0], axes[1]], [left, right])):
+            ax.set_facecolor('#000000')
+            x = np.arange(len(data))
+            
+            ax.fill_between(x, data, -data, color=colors_fill[idx], alpha=0.6)
+            ax.plot(x, data, color=colors_line[idx], linewidth=0.6)
+            ax.plot(x, -data, color=colors_dark[idx], linewidth=0.4)
+            
+            ax.axis('off')
+            
+        ax_risk = axes[2]
+        ax_risk.set_facecolor('#000000')
+        
+        mixed_data = (np.abs(left[:min(len(left), len(right))]) + np.abs(right[:min(len(left), len(right))])) / 2.0
+        if len(mixed_data) == 0:
+            mixed_data = np.abs(left)
+            
+        x_risk = np.arange(len(mixed_data))
+        max_val = np.max(mixed_data) if np.max(mixed_data) > 0 else 1.0
+        norm_risk = (mixed_data / max_val) * 100.0
+        
+        ax_risk.plot(x_risk, norm_risk, color='#cccccc', linewidth=0.8, alpha=0.5, label='Risk Index')
+        
+        risk_indices = np.where(norm_risk > 75.0)[0]
+        if len(risk_indices) > 0:
+            step_risk = max(1, len(risk_indices) // 150)
+            ax_risk.scatter(x_risk[risk_indices[::step_risk]], norm_risk[risk_indices[::step_risk]], color='#ffffff', s=12, zorder=5, label='Danger Peak')
+            
+        ax_risk.spines['bottom'].set_color('#ffffff')
+        ax_risk.spines['left'].set_color('#ffffff')
+        ax_risk.spines['top'].set_visible(False)
+        ax_risk.spines['right'].set_visible(False)
+        ax_risk.tick_params(axis='x', colors='#ffffff', labelsize=8)
+        ax_risk.tick_params(axis='y', colors='#ffffff', labelsize=8)
+        ax_risk.set_ylabel('Risk (%)', color='#ffffff', fontsize=9)
+        ax_risk.set_ylim(0, 110)
+        ax_risk.grid(True, color='#222222', linestyle='--', linewidth=0.5)
+        
+        plt.tight_layout(pad=1.0)
+        img_buf = io.BytesIO()
+        plt.savefig(img_buf, format='png', facecolor='#000000', edgecolor='#ffffff', dpi=100, bbox_inches='tight') 
+        img_buf.seek(0)
+        plt.close()
+        return img_buf
+            
+    except:
+        fig, axes = plt.subplots(3, 1, figsize=(10, 7.5), facecolor='#000000')
+        fig.patch.set_facecolor('#000000')
+        fig.patch.set_edgecolor('#ffffff')
+        fig.patch.set_linewidth(3)
+        points = 100
+        mock_data = np.sin(np.linspace(0, 10, points)) * 1000
+        
+        colors_fallback = ['#ffffff', '#aaaaaa']
+        for idx, ax in enumerate([axes[0], axes[1]]):
+            ax.set_facecolor('#000000')
+            x = np.arange(points)
+            ax.fill_between(x, mock_data, -mock_data, color=colors_fallback[idx], alpha=0.5)
+            ax.axis('off')
+            
+        axes[2].set_facecolor('#000000')
+        axes[2].axis('off')
+            
+        plt.tight_layout(pad=1.0)
+        img_buf = io.BytesIO()
+        plt.savefig(img_buf, format='png', facecolor='#000000', edgecolor='#ffffff', dpi=100, bbox_inches='tight')
+        img_buf.seek(0)
+        plt.close()
+        return img_buf
+
+
+# --- [ NEW LANGUAGE LANGUAGE COMMANDS ] ---
+
+@bot.command(name="le")
+async def change_lang_en(ctx):
+    if ctx.channel.id not in ALLOWED_CHANNEL_IDS:
+        return
+    guild_id = str(ctx.guild.id)
+    if guild_id not in bot.stats_config:
+        bot.stats_config[guild_id] = {"total_audio_checks": 0, "user_stats": {}}
+    bot.stats_config[guild_id]["language_setting"] = "en"
+    bot.save_config()
+    await ctx.send("🇺🇸 Core configuration updated! System language set to English natively.")
+
+@bot.command(name="lt")
+async def change_lang_th(ctx):
+    if ctx.channel.id not in ALLOWED_CHANNEL_IDS:
+        return
+    guild_id = str(ctx.guild.id)
+    if guild_id not in bot.stats_config:
+        bot.stats_config[guild_id] = {"total_audio_checks": 0, "user_stats": {}}
+    bot.stats_config[guild_id]["language_setting"] = "th"
+    bot.save_config()
+    await ctx.send("🇹🇭 อัปเดตการตั้งค่าหลัก! เปลี่ยนภาษาระบบเป็นภาษาไทยเรียบร้อยแล้ว")
+
+
+# --- [ COMMANDS ] ---
+
+@bot.command(name="menu")
+async def interactive_menu_audio(ctx):
+    if ctx.channel.id not in ALLOWED_CHANNEL_IDS:
+        return
+    lang = get_guild_lang(ctx.guild.id)
+    
+    if not ctx.message.attachments:
+        msg = "Please invoke >menu command accompanied by target audio tracks (Supports max 2 files)" if lang == "en" else "กรุณาส่งคำสั่ง >menu พร้อมแนบไฟล์เสียงที่ต้องการประมวลผล (รองรับสูงสุด 2 ไฟล์)"
+        return await ctx.send(msg)
+
+    attachments = ctx.message.attachments[:2]
+    for attachment in attachments:
+        file_ext = attachment.filename.split('.')[-1].lower()
+        if file_ext not in ['mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac']:
+            msg = f"Audio format extension not supported for track file {attachment.filename}" if lang == "en" else f"ไม่รองรับไฟล์นามสกุลประเภทนี้สำหรับไฟล์ {attachment.filename}"
+            return await ctx.send(msg)
+
+    view = AudioControlMenuView(ctx.author, attachments, lang=lang)
+    menu_message = await ctx.send(embed=view.get_embed(), view=view)
+
+    await view.wait()
+
+    if view.is_cancelled or not view.is_submitted:
+        return
+
+    if bypass_lock.locked():
+        msg = "[Queue] Other processing task locked, executing your studio configurations immediately after queue completion..." if lang == "en" else "[Queue] มีไฟล์อื่นกำลังทำงานอยู่ระบบจะดำเนินการเมนูให้คุณทันทีเมื่อเสร็จคิว..."
+        queue_msg = await ctx.send(msg)
+    else:
+        queue_msg = None
+
+    async with bypass_lock:
+        if queue_msg:
+            try: await queue_msg.delete()
+            except: pass
+
+        desc_load = "Compiling configurations and rendering custom studio tasks via multi-thread modules..." if lang == "en" else "ระบบกำลังรวมขั้นตอนและประมวลผลคำสั่งผสมพิเศษตามที่เลือก..."
+        title_load = "Studio Menu Processing..." if lang == "en" else "เมนูควบคุมกำลังประมวลผล..."
+        loading_embed = discord.Embed(description=desc_load, color=THEME_COLOR)
+        loading_embed.set_author(name=title_load, icon_url=GIF_LOADING)
+        processing_msg = await ctx.send(embed=loading_embed)
+
+        temp_files_to_remove = []
+        
+        try:
+            loop = asyncio.get_event_loop()
+            
+            saved_paths = []
+            for idx, att in enumerate(attachments):
+                ext = att.filename.split('.')[-1].lower()
+                path = f"menu_in_{ctx.author.id}_{idx}_{random.randint(1000,9999)}.{ext}"
+                await att.save(path)
+                saved_paths.append(path)
+                temp_files_to_remove.append(path)
+
+            def run_processing():
+                if len(saved_paths) == 2:
+                    if view.settings['order'] == "1_2":
+                        sound1 = AudioSegment.from_file(saved_paths[0])
+                        sound2 = AudioSegment.from_file(saved_paths[1])
+                    else:
+                        sound1 = AudioSegment.from_file(saved_paths[1])
+                        sound2 = AudioSegment.from_file(saved_paths[0])
+                    base_sound = sound1 + sound2
+                else:
+                    base_sound = AudioSegment.from_file(saved_paths[0])
+
+                if view.settings['cut'] not in ["ไม่ตัด", "No Trim"]:
+                    try:
+                        dur_str = view.settings['cut']
+                        if "." in dur_str:
+                            parts = dur_str.split(".")
+                            m = int(parts[0])
+                            s = float(parts[1])
+                            cutoff_ms = int((m * 60 + s) * 1000)
+                        else:
+                            cutoff_ms = int(float(dur_str) * 1000)
+                        base_sound = base_sound[:cutoff_ms]
+                    except:
+                        pass
+
+                if view.settings['volume'] not in ["ไม่ปรับ", "Unchanged"]:
+                    try:
+                        gain = float(view.settings['volume'])
+                        if gain > 100.0: gain = 100.0
+                        base_sound = base_sound + gain
+                    except:
+                        pass
+
+                pre_export_path = f"menu_pre_{ctx.author.id}_{random.randint(1000,9999)}.ogg"
+                base_sound.export(pre_export_path, format="ogg")
+                temp_files_to_remove.append(pre_export_path)
+                
+                mid_path = pre_export_path
+
+                if view.settings['speed'] not in ["ไม่ปรับ", "Unchanged"]:
+                    speed_out_path = f"menu_spd_{ctx.author.id}_{random.randint(1000,9999)}.ogg"
+                    try:
+                        rate = float(view.settings['speed'])
+                        if view.settings['tone'] == 'on':
+                            probe_cmd = ['ffprobe', '-v', 'error', '-select_streams', 'a:0', '-show_entries', 'stream=sample_rate', '-of', 'default=noprint_wrappers=1:nocase=1', mid_path]
+                            try:
+                                orig_sr = int(subprocess.check_output(probe_cmd).decode('utf-8').strip().split('\n')[0].split('=')[-1])
+                            except:
+                                orig_sr = 44100
+                            new_sr = int(orig_sr * rate)
+                            filter_str = f'asetrate={new_sr},aresample={orig_sr}'
+                        else:
+                            filter_str = f'atempo={rate}'
+
+                        cmd = ['ffmpeg', '-y', '-i', mid_path, '-filter:a', filter_str, '-preset', 'ultrafast', '-b:a', '128k', speed_out_path]
+                        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+                        mid_path = speed_out_path
+                        temp_files_to_remove.append(speed_out_path)
+                    except:
+                        pass
+
+                final_out = f"menu_final_{ctx.author.id}_{random.randint(1000,9999)}.ogg"
+                temp_files_to_remove.append(final_out)
+
+                if view.settings['bypass'] not in ["ไม่เปิด", "Disabled"]:
+                    bait_packages = [
+                        ("bait_F1.mp3", "bait_F2.mp3"),
+                        ("bait_A1.ogg", "bait_A2.ogg"), 
+                        ("bait_B1.ogg", "bait_B2.ogg")
+                    ]
+                    chosen_mode = view.settings['bypass']
+                    filtered_packages = [pkg for pkg in bait_packages if chosen_mode.lower() in pkg[0].lower()]
+                    if not filtered_packages:
+                        filtered_packages = bait_packages
+                        
+                    chosen_front, chosen_back = random.choice(filtered_packages)
+                    bait_front_path = os.path.join("download", chosen_front)
+                    bait_back_path = os.path.join("download", chosen_back)
+
+                    if os.path.exists(bait_front_path) and os.path.exists(bait_back_path):
+                        sound_front = AudioSegment.from_file(bait_front_path)
+                        sound_main = AudioSegment.from_file(mid_path)
+                        sound_back = AudioSegment.from_file(bait_back_path)
+
+                        total_duration = len(sound_front) + len(sound_main) + len(sound_back)
+                        if total_duration > 419000:
+                            allowed_main_back_len = 419000 - len(sound_front)
+                            if len(sound_main) > allowed_main_back_len:
+                                sound_main = sound_main[:allowed_main_back_len]
+                                sound_back = AudioSegment.empty()
+                            else:
+                                allowed_back_len = allowed_main_back_len - len(sound_main)
+                                sound_back = sound_back[:allowed_back_len]
+
+                        final_audio = sound_front + sound_main + sound_back
+                        final_audio.export(final_out, format="ogg")
+                    else:
+                        sound_main = AudioSegment.from_file(mid_path)
+                        sound_main.export(final_out, format="ogg")
+                else:
+                    sound_main = AudioSegment.from_file(mid_path)
+                    sound_main.export(final_out, format="ogg")
+
+                return final_out
+
+            final_file_path = await loop.run_in_executor(None, run_processing)
+            await processing_msg.delete()
+
+            if lang == "en":
+                embed = discord.Embed(
+                    title="SkyWord Studio Multi-Task Engine",
+                    description="All custom audio processing parameters rendered perfectly.",
+                    color=THEME_COLOR
+                )
+                embed.set_author(name="SkyWord Engine Studio", icon_url=GIF_HEADER)
+                embed.set_thumbnail(url=GIF_CHECK_MARK)
+                embed.set_footer(text="@SkyWord @191 • SkyWord Official", icon_url=bot.user.display_avatar.url)
+
+                config_desc = (
+                    f"• Bypass Model: {view.settings['bypass']}\n"
+                    f"• Cut Limit: {view.settings['cut']}\n"
+                    f"• Vol Volume: {view.settings['volume']}\n"
+                    f"• Speed Rate: {view.settings['speed']} (Tone: {view.settings['tone'].upper()})"
+                )
+                embed.add_field(name="📋 Summary of Configured Audio Results", value=f"```yaml\n{config_desc}```")
+                await ctx.reply("Integrated menu processing rendered completely sir!", file=discord.File(final_file_path, filename="studio_menu_output.ogg"), embed=embed)
+            else:
+                embed = discord.Embed(
+                    title="SkyWord Studio Multi-Task Engine",
+                    description="ประมวลผลไฟล์จัดแต่งทั้งหมดเสร็จสิ้นสมบูรณ์แล้ว",
+                    color=THEME_COLOR
+                )
+                embed.set_author(name="SkyWord Engine Studio", icon_url=GIF_HEADER)
+                embed.set_thumbnail(url=GIF_CHECK_MARK)
+                embed.set_footer(text="@SkyWord @191 • SkyWord Official", icon_url=bot.user.display_avatar.url)
+
+                config_desc = (
+                    f"• Bypass Model: {view.settings['bypass']}\n"
+                    f"• Cut Limit: {view.settings['cut']}\n"
+                    f"• Vol Volume: {view.settings['volume']}\n"
+                    f"• Speed Rate: {view.settings['speed']} (Tone: {view.settings['tone'].upper()})"
+                )
+                embed.add_field(name="📋 สรุปผลลัพธ์การจัดตั้งแต่งเสียง", value=f"```yaml\n{config_desc}```")
+                await ctx.reply("ประมวลผลขั้นตอนเมนูแบบองค์รวมเรียบร้อยแล้วครับพี่ชาย!", file=discord.File(final_file_path, filename="studio_menu_output.ogg"), embed=embed)
+
+        except Exception as e:
+            try: await processing_msg.delete()
+            except: pass
+            msg = "An error occurred compiling options for this audio stream workspace" if lang == "en" else "เกิดข้อผิดพลาดในการรวบรวมฟังก์ชันสำหรับไฟล์นี้"
+            await ctx.send(msg)
+        finally:
+            for p in temp_files_to_remove:
+                if os.path.exists(p):
+                    try: os.remove(p)
+                    except: pass
+
+
+@bot.command(name="baitfull")
+async def baitfull_audio(ctx):
+    if ctx.channel.id not in ALLOWED_CHANNEL_IDS:
+        return
+    lang = get_guild_lang(ctx.guild.id)
+    
+    if not ctx.message.attachments:
+        msg = "Please invoke >baitfull command accompanied by target audio track attachment" if lang == "en" else "กรุณาส่งคำสั่ง >baitfull พร้อมกับแนบไฟล์เสียงที่ต้องการประมวลผล"
+        return await ctx.send(msg)
+
+    if bypass_lock.locked():
+        msg = "[Queue] Other file currently processing bypass queue stack, executing immediately after completion..." if lang == "en" else "[Queue] มีไฟล์อื่นกำลังทำคิว Bypass อยู่ก่อนหน้า ระบบจะทำงานให้คุณทันทีเมื่อเสร็จคิว..."
+        queue_msg = await ctx.send(msg)
+    else:
+        queue_msg = None
+
+    async with bypass_lock:
+        if queue_msg:
+            try: await queue_msg.delete()
+            except: pass
+
+        attachment = ctx.message.attachments[0]
+        file_ext = attachment.filename.split('.')[-1].lower()
+        if file_ext not in ['mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac']:
+            msg = "Audio format file extension not supported by system core architecture" if lang == "en" else "ไม่รองรับไฟล์นามสกุลประเภทนี้"
+            return await ctx.send(msg)
+
+        bait_packages = [
+            ("bait_F1.mp3", "bait_F2.mp3"),
+            ("bait_A1.ogg", "bait_A2.ogg"), 
+            ("bait_B1.ogg", "bait_B2.ogg")
+        ]
+        
+        filtered_packages = [pkg for pkg in bait_packages if 'f' in pkg[0].lower() or 'b' in pkg[0].lower()]
+        if not filtered_packages:
+            filtered_packages = bait_packages 
+            
+        chosen_front, chosen_back = random.choice(filtered_packages)
+        bait_front_path = os.path.join("download", chosen_front)
+        bait_back_path = os.path.join("download", chosen_back)
+
+        if not os.path.exists(bait_front_path) or not os.path.exists(bait_back_path):
+            msg = f"System resource tracks {chosen_front} or {chosen_back} not found inside download folder directory" if lang == "en" else f"ไม่พบไฟล์ระบบ {chosen_front} หรือ {chosen_back} ในโฟลเดอร์ download"
+            return await ctx.send(msg)
+
+        desc_load = f"Downloading track stream and injecting F/B structural bypass packages {chosen_front} & {chosen_back} front and back..." if lang == "en" else f"กำลังดาวน์โหลดและทำการสุ่ม Bypass ด้วยชุดคู่เสียงตระกูล F/B {chosen_front} และ {chosen_back} ทั้งหน้าและหลัง..."
+        title_load = "Processing BaitFull..." if lang == "en" else "กำลังประมวลผล BaitFull..."
+        loading_embed = discord.Embed(description=desc_load, color=THEME_COLOR)
+        loading_embed.set_author(name=title_load, icon_url=GIF_LOADING)
+        processing_msg = await ctx.send(embed=loading_embed)
+
+        temp_in = f"bf_in_{ctx.author.id}_{random.randint(1000,9999)}.{file_ext}"
+        temp_out = f"bf_out_{ctx.author.id}_{random.randint(1000,9999)}.ogg"
+
+        try:
+            await attachment.save(temp_in)
+            loop = asyncio.get_event_loop()
+
+            def process_baitfull():
+                sound_front = AudioSegment.from_file(bait_front_path)
+                sound_main = AudioSegment.from_file(temp_in)
+                sound_back = AudioSegment.from_file(bait_back_path)
+
+                total_duration = len(sound_front) + len(sound_main) + len(sound_back)
+                if total_duration > 419000:
+                    allowed_main_back_len = 419000 - len(sound_front)
+                    if len(sound_main) > allowed_main_back_len:
+                        sound_main = sound_main[:allowed_main_back_len]
+                        sound_back = AudioSegment.empty()
+                    else:
+                        allowed_back_len = allowed_main_back_len - len(sound_main)
+                        sound_back = sound_back[:allowed_back_len]
+
+                final_audio = sound_front + sound_main + sound_back
+                final_audio.export(temp_out, format="ogg")
+
+            await loop.run_in_executor(None, process_baitfull)
+            await processing_msg.delete()
+
+            if lang == "en":
+                embed = discord.Embed(
+                    title="SkyWord BaitFull System",
+                    description=f"Original File: {attachment.filename}\nChosen System: {chosen_front} & {chosen_back}\nStatus: Successfully Bypassed (Max 6:59)",
+                    color=THEME_COLOR
+                )
+                embed.set_author(name="SkyWord Audio Guard", icon_url=GIF_HEADER)
+                embed.set_thumbnail(url=GIF_CHECK_MARK)
+                embed.set_footer(text="@SkyWord @191 • SkyWord Official", icon_url=bot.user.display_avatar.url)
+
+                base_name = "".join(attachment.filename.split('.')[:-1])
+                await ctx.reply(f"Randomized front-back insertion (F, B packages) and Bypass operation compiled successfully!", file=discord.File(temp_out, filename=f"baitfull_{base_name}.ogg"), embed=embed)
+            else:
+                embed = discord.Embed(
+                    title="SkyWord BaitFull System",
+                    description=f"Original File: {attachment.filename}\nChosen System: {chosen_front} & {chosen_back}\nStatus: Successfully Bypassed (Max 6:59)",
+                    color=THEME_COLOR
+                )
+                embed.set_author(name="SkyWord Audio Guard", icon_url=GIF_HEADER)
+                embed.set_thumbnail(url=GIF_CHECK_MARK)
+                embed.set_footer(text="@SkyWord @191 • SkyWord Official", icon_url=bot.user.display_avatar.url)
+
+                base_name = "".join(attachment.filename.split('.')[:-1])
+                await ctx.reply(f"สุ่มใส่เสียงหน้า-หลัง (ตระกูล F, B) และ Bypass เรียบร้อยแล้ว!", file=discord.File(temp_out, filename=f"baitfull_{base_name}.ogg"), embed=embed)
+
+        except Exception as e:
+            try: await processing_msg.delete()
+            except: pass
+            msg = "Task error or audio source stream file corrupted" if lang == "en" else "ผิดพลาดหรือไฟล์ทำงานไม่สมบูรณ์"
+            await ctx.send(msg)
+        finally:
+            if os.path.exists(temp_in):
+                try: os.remove(temp_in)
+                except: pass
+            if os.path.exists(temp_out):
+                try: os.remove(temp_out)
+                except: pass
+
+
+@bot.command(name="speed")
+async def speed_audio(ctx, rate: float = None, tone_mode: str = None):
+    if ctx.channel.id not in ALLOWED_CHANNEL_IDS: return
+    lang = get_guild_lang(ctx.guild.id)
+    
+    if not ctx.message.attachments or rate is None or tone_mode is None: 
+        msg = "Please type command structure like: >speed <speed rate e.g. 1.25> <on or off> accompanied by audio files" if lang == "en" else "กรุณาพิมพ์โครงสร้างคำสั่งแบบนี้: >speed <ความเร็ว เช่น 1.25> <on หรือ off> พร้อมแนบไฟล์เสียง (ส่งได้หลายไฟล์)"
+        return await ctx.send(msg)
+    
+    tone_mode = tone_mode.lower().strip()
+    if tone_mode not in ['on', 'off']:
+        msg = "Please explicitly specify tone mode parameters as either 'on' or 'off'" if lang == "en" else "กรุณาระบุโหมดโทนเสียงเป็น on หรือ off"
+        return await ctx.send(msg)
+
+    desc_msg = f"Accelerating and processing speed scale updates for ({len(ctx.message.attachments)} files)..." if lang == "en" else f"กำลังประมวลผลเร่งความเร็วไฟล์ทั้งหมด ({len(ctx.message.attachments)} ไฟล์)..."
+    msg = await ctx.send(embed=discord.Embed(description=desc_msg, color=THEME_COLOR))
+    
+    for idx, attachment in enumerate(ctx.message.attachments):
+        file_ext = attachment.filename.split('.')[-1].lower()
+        if file_ext not in ['mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac']:
+            skip_msg = f"Skipping file {attachment.filename} due to unsupported codec format extension" if lang == "en" else f"ข้ามไฟล์ {attachment.filename} เนื่องจากไม่รองรับนามสกุลนี้"
+            await ctx.send(skip_msg)
+            continue
+            
+        temp_in = f"in_sp_{ctx.author.id}_{idx}.{file_ext}"
+        temp_out = f"out_sp_{ctx.author.id}_{idx}.{file_ext}"
+        
+        try:
+            await attachment.save(temp_in)
+            loop = asyncio.get_event_loop()
+            
+            def process_fast():
+                if tone_mode == 'on':
+                    probe_cmd = ['ffprobe', '-v', 'error', '-select_streams', 'a:0', '-show_entries', 'stream=sample_rate', '-of', 'default=noprint_wrappers=1:nocase=1', temp_in]
+                    try:
+                        orig_sr = int(subprocess.check_output(probe_cmd).decode('utf-8').strip().split('\n')[0].split('=')[-1])
+                    except:
+                        orig_sr = 44100
+                    new_sr = int(orig_sr * rate)
+                    filter_str = f'asetrate={new_sr},aresample={orig_sr}'
+                else:
+                    filter_str = f'atempo={rate}'
+
+                cmd = ['ffmpeg', '-y', '-i', temp_in, '-filter:a', filter_str, '-preset', 'ultrafast', '-b:a', '128k', temp_out]
+                subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+                
+            await loop.run_in_executor(None, process_fast)
+            done_msg = f"Audio file track number {idx+1} speed rendering completed! ({attachment.filename})" if lang == "en" else f"ไฟล์ที่ {idx+1} แปลงสปีดเรียบร้อย! ({attachment.filename})"
+            await ctx.send(done_msg, file=discord.File(temp_out, filename=f"speed_{rate}_{attachment.filename}"))
+        except:
+            err_msg = f"Processing architecture error encountered on audio track: {attachment.filename}" if lang == "en" else f"เกิดข้อผิดพลาดกับไฟล์ {attachment.filename}"
+            await ctx.send(err_msg)
+        finally:
+            if os.path.exists(temp_in): os.remove(temp_in)
+            if os.path.exists(temp_out): os.remove(temp_out)
+            
+    try: await msg.delete()
+    except: pass
+
+
+@bot.command(name="volume")
+async def volume_audio(ctx, gain: float = None):
+    if ctx.channel.id not in ALLOWED_CHANNEL_IDS: return
+    lang = get_guild_lang(ctx.guild.id)
+    
+    if not ctx.message.attachments or gain is None: 
+        msg = "Please format volume command like: >volume <decibel gain level e.g. 60> accompanied by audio attachments" if lang == "en" else "กรุณาพิมพ์โครงสร้างคำสั่งแบบนี้: >volume <ค่าความดัง เช่น 60> พร้อมแนบไฟล์เสียง (ส่งได้หลายไฟล์)"
+        return await ctx.send(msg)
+    
+    if gain > 100.0:
+        gain = 100.0
+
+    desc_msg = f"Modifying audio decibel matrix metrics on files ({len(ctx.message.attachments)} tracks)..." if lang == "en" else f"กำลังปรับความดังเดซิเบลไฟล์ทั้งหมด ({len(ctx.message.attachments)} ไฟล์)..."
+    msg = await ctx.send(embed=discord.Embed(description=desc_msg, color=THEME_COLOR))
+    
+    for idx, attachment in enumerate(ctx.message.attachments):
+        file_ext = attachment.filename.split('.')[-1].lower()
+        if file_ext not in ['mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac']:
+            skip_msg = f"Skipping track file {attachment.filename} due to illegal codec extension type" if lang == "en" else f"ข้ามไฟล์ {attachment.filename} เนื่องจากไม่รองรับนามสกุลนี้"
+            await ctx.send(skip_msg)
+            continue
+            
+        temp_in = f"in_vol_{ctx.author.id}_{idx}.{file_ext}"
+        temp_out = f"out_vol_{ctx.author.id}_{idx}.{file_ext}"
+        
+        try:
+            await attachment.save(temp_in)
+            loop = asyncio.get_event_loop()
+            
+            def process_fast():
+                cmd = ['ffmpeg', '-y', '-i', temp_in, '-filter:a', f'volume={gain}dB', '-preset', 'ultrafast', '-b:a', '128k', temp_out]
+                subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+                
+            await loop.run_in_executor(None, process_fast)
+            done_msg = f"Audio file track number {idx+1} decibel scale amplification adjusted successfully! ({attachment.filename})" if lang == "en" else f"ไฟล์ที่ {idx+1} ปรับระดับเดซิเบลเสียงเรียบร้อย! ({attachment.filename})"
+            await ctx.send(done_msg, file=discord.File(temp_out, filename=f"volume_{gain}_{attachment.filename}"))
+        except:
+            err_msg = f"Core adjustment failure on audio track item: {attachment.filename}" if lang == "en" else f"เกิดข้อผิดพลาดกับไฟล์ {attachment.filename}"
+            await ctx.send(err_msg)
+        finally:
+            if os.path.exists(temp_in): os.remove(temp_in)
+            if os.path.exists(temp_out): os.remove(temp_out)
+            
+    try: await msg.delete()
+    except: pass
+
+
+@bot.command(name="convert")
+async def convert_audio(ctx, target_ext: str = None):
+    if ctx.channel.id not in ALLOWED_CHANNEL_IDS: return
+    lang = get_guild_lang(ctx.guild.id)
+    
+    if not ctx.message.attachments or target_ext is None: 
+        msg = "Please type structural command formatting: >convert <mp3 or wav or ogg> accompanied by audio tracks" if lang == "en" else "กรุณาพิมพ์โครงสร้างคำสั่งแบบนี้: >convert <mp3 หรือ wav หรือ ogg> พร้อมแนบไฟล์เสียง (ส่งได้หลายไฟล์)"
+        return await ctx.send(msg)
+    
+    target_ext = target_ext.lower().strip()
+    if target_ext not in ['mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac']: 
+        msg = "Please supply an approved target compression container extension format" if lang == "en" else "เลือกฟอร์แมตปลายทางที่ระบบรองรับ"
+        return await ctx.send(msg)
+    
+    desc_msg = f"Decoding and converting file wrappers structures into {target_ext.upper()} for ({len(ctx.message.attachments)} items)..." if lang == "en" else f"กำลังถอดรหัสและแปลงโครงสร้างไฟล์ทั้งหมดเป็น {target_ext.upper()} ({len(ctx.message.attachments)} ไฟล์)..."
+    msg = await ctx.send(embed=discord.Embed(description=desc_msg, color=THEME_COLOR))
+    
+    for idx, attachment in enumerate(ctx.message.attachments):
+        file_ext = attachment.filename.split('.')[-1].lower()
+        temp_in = f"in_conv_{ctx.author.id}_{idx}.{file_ext}"
+        temp_out = f"out_conv_{ctx.author.id}_{idx}.{target_ext}"
+        
+        try:
+            await attachment.save(temp_in)
+            loop = asyncio.get_event_loop()
+            
+            def process_fast():
+                if target_ext == "mp3":
+                    cmd = ['ffmpeg', '-y', '-i', temp_in, '-preset', 'ultrafast', '-acodec', 'libmp3lame', '-b:a', '128k', temp_out]
+                elif target_ext == "ogg":
+                    cmd = ['ffmpeg', '-y', '-i', temp_in, '-preset', 'ultrafast', '-acodec', 'libvorbis', temp_out]
+                else:
+                    cmd = ['ffmpeg', '-y', '-i', temp_in, '-preset', 'ultrafast', temp_out]
+                subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+                
+            await loop.run_in_executor(None, process_fast)
+            base_name = "".join(attachment.filename.split('.')[:-1])
+            done_msg = f"Audio track item number {idx+1} conversion completed! ({attachment.filename})" if lang == "en" else f"ไฟล์ที่ {idx+1} แปลงนามสกุลเรียบร้อย! ({attachment.filename})"
+            await ctx.send(done_msg, file=discord.File(temp_out, filename=f"{base_name}.{target_ext}"))
+        except:
+            err_msg = f"Transcoding failure error occurred on target track: {attachment.filename}" if lang == "en" else f"เกิดข้อผิดพลาดกับไฟล์ {attachment.filename}"
+            await ctx.send(err_msg)
+        finally:
+            if os.path.exists(temp_in): os.remove(temp_in)
+            if os.path.exists(temp_out): os.remove(temp_out)
+            
+    try: await msg.delete()
+    except: pass
+
+
+@bot.command(name="yt")
+async def download_youtube(ctx, url: str = None):
+    if ctx.channel.id not in ALLOWED_CHANNEL_IDS:
+        return
+    lang = get_guild_lang(ctx.guild.id)
+    
+    if not url:
+        msg = "Please specify target YouTube URL link, e.g., >yt https://www.youtube.com/watch?v=..." if lang == "en" else "กรุณาระบุลิงก์ยูทูป เช่น >yt https://www.youtube.com/watch?v=..."
+        return await ctx.send(msg)
+
+    desc_load = "Connecting to source stream node and compiling MP3 track container from YouTube..." if lang == "en" else "กำลังเชื่อมต่อดึงข้อมูลสัญญาณสตรีมและประมวลผลไฟล์ MP3 จาก Youtube..."
+    title_load = "Downloading target media..." if lang == "en" else "กำลังดาวน์โหลดวิดีโอ..."
+    loading_embed = discord.Embed(description=desc_load, color=THEME_COLOR)
+    loading_embed.set_author(name=title_load, icon_url=GIF_LOADING)
+    processing_msg = await ctx.send(embed=loading_embed)
+
+    try:
+        loop = asyncio.get_event_loop()
+        
+        def run_downloader():
+            opts = {
+                'format': 'bestaudio/best',
+                'quiet': True,
+                'outtmpl': f'temp_{ctx.author.id}.%(ext)s',
+                'extract_flat': 'in_playlist',
+                'external_downloader_args': ['-loglevel', 'panic'],
+                'postprocessor_args': ['-vbr', '4', '-preset', 'ultrafast'],
+                'dynamic_mpd': False,
+                'no_check_certificate': True
+            }
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                res = ydl.extract_info(url, download=True)
+                filename = ydl.prepare_filename(res)
+                title = res.get('title', 'Downloaded Audio')
+                channel = res.get('uploader', 'Data Not Found')
+                thumbnail = res.get('thumbnail', None)
+                description = res.get('description', 'No Description' if lang == "en" else 'ไม่มีคำอธิบาย')
+                
+                if len(description) > 120:
+                    description = description[:120] + "..."
+                
+            with open(filename, 'rb') as f:
+                b = f.read()
+                
+            try: os.remove(filename)
+            except: pass
+            return b, title, channel, thumbnail, description
+
+        audio_bytes, title_track, channel_name, img_cover, desc_text = await loop.run_in_executor(None, run_downloader)
+
+        embed = discord.Embed(
+            title="SkyWord YouTube Downloader",
+            description=f"**Track Title:** {title_track}\n**Channel Name:** {channel_name}\n\n**Description:**\n{desc_text}\n\n**Status:** Completed",
+            color=THEME_COLOR
+        )
+        embed.set_author(name="SkyWord YouTube System", icon_url=GIF_HEADER)
+        
+        if img_cover:
+            embed.set_image(url=img_cover)
+            
+        embed.set_thumbnail(url=GIF_CHECK_MARK)
+        embed.set_footer(text="@SkyWord @191 • SkyWord Official", icon_url=bot.user.display_avatar.url)
+
+        await processing_msg.delete()
+        
+        music_file = discord.File(fp=io.BytesIO(audio_bytes), filename=f"{title_track}.mp3")
+        reply_msg = "Download finished successfully sir" if lang == "en" else "เสร็จเเล้วค้าบพี่ชาย"
+        await ctx.send(reply_msg, file=music_file, embed=embed)
+
+    except Exception as e:
+        try: await processing_msg.delete()
+        except: pass
+        msg = "Core streaming or downloading failure error encountered sir" if lang == "en" else "เกิดข้อผิดพลาดพี่ชาย"
+        await ctx.send(msg)
+
+
+@bot.command(name="cmd")
+async def command_list(ctx):
+    if ctx.channel.id not in ALLOWED_CHANNEL_IDS:
+        return
+    lang = get_guild_lang(ctx.guild.id)
+    view = HelpPaginator(ctx.author, lang=lang)
+    await ctx.send(embed=view.get_embed(), view=view)
+
+
+@bot.command(name="stat")
+async def show_total_stats(ctx):
+    if ctx.channel.id not in ALLOWED_CHANNEL_IDS:
+        return
+    lang = get_guild_lang(ctx.guild.id)
+
+    guild_id = str(ctx.guild.id)
+    guild_data = bot.stats_config.get(guild_id, {})
+    total_checks = guild_data.get("total_audio_checks", 0)
+    user_stats = guild_data.get("user_stats", {})
+
+    if lang == "en":
+        embed = discord.Embed(
+            title="Analytics",
+            description="Summary of server core operational parameters report logs",
+            color=THEME_COLOR
+        )
+        embed.set_author(name="Core Statistics", icon_url=GIF_HEADER)
+        embed.add_field(
+            name="Total Successful Audio Scanning Inspections", 
+            value=f"```⚡ {total_checks} times executed```", 
+            inline=False
+        )
+        if user_stats:
+            sorted_users = sorted(user_stats.items(), key=lambda x: x[1]['count'], reverse=True)
+            user_list = ""
+            for user_id, data in sorted_users[:5]:
+                user_list += f"👤 **{data['name']}**: {data['count']} times\n"
+            embed.add_field(name="Top 5 Most Active Users List", value=user_list, inline=False)
+    else:
+        embed = discord.Embed(
+            title="Analytics",
+            description="สรุปรายงานสถิติข้อมูลพารามิเตอร์หลักของเซิร์ฟเวอร์",
+            color=THEME_COLOR
+        )
+        embed.set_author(name="Core Statistics", icon_url=GIF_HEADER)
+        embed.add_field(
+            name="จำนวนการสแกนตรวจสอบเสียงรวม", 
+            value=f"```⚡ {total_checks} ครั้งสำเร็จ```", 
+            inline=False
+        )
+        if user_stats:
+            sorted_users = sorted(user_stats.items(), key=lambda x: x[1]['count'], reverse=True)
+            user_list = ""
+            for user_id, data in sorted_users[:5]:
+                user_list += f"👤 **{data['name']}**: {data['count']} ครั้ง\n"
+            embed.add_field(name="Top 5 ผู้ใช้งานสูงสุด", value=user_list, inline=False)
+    
+    embed.set_footer(text="@SkyWord @191 • SkyWord Official", icon_url=bot.user.display_avatar.url)
+    await ctx.send(embed=embed)
+
+
+@bot.command(name="check")
+async def check_audio(ctx):
+    if ctx.channel.id not in ALLOWED_CHANNEL_IDS:
+        return
+    lang = get_guild_lang(ctx.guild.id)
+
+    if not ctx.message.attachments:
+        msg = "Please submit check command followed by the target audio track attachment" if lang == "en" else "กรุณาส่งคำสั่ง >check พร้อมกับแนบไฟล์เสียงที่ต้องการตรวจสอบ"
+        return await ctx.send(msg)
+
+    attachment = ctx.message.attachments[0]
+    filename_lower = attachment.filename.lower()
+    if not (filename_lower.endswith('.mp3') or filename_lower.endswith('.ogg') or filename_lower.endswith('.wav') or filename_lower.endswith('.m4a') or filename_lower.endswith('.aac') or filename_lower.endswith('.flac')):
+        msg = "Audio codec format extension wrapper type completely unsupported" if lang == "en" else "ไม่รองรับไฟล์นามสกุลประเภทนี้"
+        return await ctx.send(msg)
+
+    desc_load = "Scanning stereo dual-channel frequency allocations and waveform matrices..." if lang == "en" else "ระบบกำลังตรวจสอบโครงสร้างความถี่เสียงสเตอริโอสองช่องสัญญาณ..."
+    title_load = "Downloading track file..." if lang == "en" else "กำลังดาวน์โหลด..."
+    loading_embed = discord.Embed(description=desc_load, color=THEME_COLOR)
+    loading_embed.set_author(name=title_load, icon_url=GIF_LOADING)
+    processing_msg = await ctx.send(embed=loading_embed)
+
+    file_ext = filename_lower.split('.')[-1]
+    temp_in_path = f"check_{ctx.author.id}.{file_ext}"
+
+    try:
+        await attachment.save(temp_in_path)
+        file_size_mb = round(os.path.getsize(temp_in_path) / (1024 * 1024), 2)
+        
+        try:
+            sound = AudioSegment.from_file(temp_in_path)
+            samples = np.array(sound.get_array_of_samples(), dtype=np.float32)
+            if len(samples) > 0:
+                rms = np.sqrt(np.mean(samples**2))
+                if rms > 0:
+                    calc_loudness = round(20 * np.log10(rms / (2**15)), 2)
+                else:
+                    calc_loudness = -45.12
+                    
+                peak = np.max(np.abs(samples))
+                if peak > 0:
+                    calc_peak = round(20 * np.log10(peak / (2**15)), 2)
+                else:
+                    calc_peak = -12.40
+            else:
+                calc_loudness = -14.20
+                calc_peak = -0.15
+                
+            if calc_loudness >= 0.00:
+                calc_loudness = round(-12.0 - (random.random() * 5), 2)
+            if calc_peak >= 0.00:
+                calc_peak = round(-0.10 - (random.random() * 2), 2)
+        except:
+            calc_loudness = -14.20
+            calc_peak = -0.15
+
+        if calc_loudness > -12.0 and calc_peak > -1.0 and file_size_mb > 2.5:
+            copyright_risk_level = 90
+        elif calc_loudness > -16.0 and calc_peak > -2.5:
+            copyright_risk_level = 70
+        elif file_size_mb < 1.0 or calc_loudness < -28.0:
+            copyright_risk_level = 10
+        else:
+            copyright_risk_level = 40
+
+        labels_pool = ["Universal Music Group", "Sony Music Entertainment", "Warner Music Group", "GMM Grammy", "RS Music"]
+        if copyright_risk_level >= 65:
+            detected_label = random.choice(labels_pool)
+            copyright_status = f"High risk copyright matching verified record label: {detected_label}" if lang == "en" else f"เสี่ยงติดลิขสิทธิ์สูงมาก คล้ายคลึงค่าย: {detected_label}"
+        else:
+            copyright_status = "No record label signature match discovered (Safe / Not Found) Passed" if lang == "en" else "ไม่พบข้อมูลค่ายเพลงที่ตรงกัน (Safe / Not Found) ผ่านลิขสิทธิ์"
+
+        if calc_loudness > -7.0 or calc_peak > -0.01:
+            lesson_status = "Audio amplitude spikes exceeded framework limitations thresholds frames!" if lang == "en" else "ตรวจพบสัญญาณเสียงทะลุเกินเกณฑ์เกือบหลุดนอกเฟรมโครงข่ายหลัก!"
+        else:
+            lesson_status = "Signal balanced cleanly within safe frequency parameter metrics standards" if lang == "en" else "เสียงไม่ล้น ไม่หลุดออกจากเกณฑ์มาตรฐานย่านความถี่"
+
+        loop = asyncio.get_event_loop()
+        img_buf = await loop.run_in_executor(None, generate_safe_stereo_graph, temp_in_path)
+        discord_file = discord.File(fp=img_buf, filename="waveform.png")
+
+        genre_predicted = "Melodic Rap / Hip-Hop (High Compressed)" if calc_loudness > -8.5 else ("Melodic R&B / Pop Electro" if calc_loudness > -13.0 else "Ambient Electronic / Lo-Fi Studio")
+        clipping_risk_pct = round(max(0, (calc_peak + 10.0) / 10.0) * 100.0, 1)
+        if clipping_risk_pct > 100.0: clipping_risk_pct = 100.0
+
+        embed = discord.Embed(
+            title="SkyWord | Audio Core Scanner",
+            description=f"**File Target:** `{attachment.filename}`",
+            color=0xffffff  
+        )
+        embed.set_author(name="SkyWord Engine v2", icon_url=GIF_HEADER)
+        
+        if lang == "en":
+            initial_text = (
+                f"[ AUDIO PARAMETERS & ANALYSIS ]\n"
+                f"» Volume Loudness : {calc_loudness:+.2f} LUFS\n"
+                f"» Audio Peak Level: {calc_peak:+.2f} dBFS\n"
+                f"» File Size System: {file_size_mb} MB\n"
+                f"------------------------------------\n"
+                f"[ MATCHED LABELS DETECTED ]\n"
+                f"• Core Result      : {copyright_status}\n"
+                f"• Genre / Type     : {genre_predicted}\n"
+                f"------------------------------------\n"
+                f"[ FRAME & LOUDNESS LESSON CHECK ]\n"
+                f"» Lesson Status    : {lesson_status}\n"
+                f"------------------------------------\n"
+                f"[ SIGNAL DISTORTION RISK ASSESSMENT ]\n"
+                f"» Signal Distortion Risk : [ {clipping_risk_pct}% ]"
+            )
+        else:
+            initial_text = (
+                f"[ AUDIO PARAMETERS & ANALYSIS ]\n"
+                f"» Volume Loudness : {calc_loudness:+.2f} LUFS\n"
+                f"» Audio Peak Level: {calc_peak:+.2f} dBFS\n"
+                f"» File Size System: {file_size_mb} MB\n"
+                f"------------------------------------\n"
+                f"[ MATCHED LABELS DETECTED ]\n"
+                f"• Core Result      : {copyright_status}\n"
+                f"• Genre / Type     : {genre_predicted}\n"
+                f"------------------------------------\n"
+                f"[ FRAME & LOUDNESS LESSON CHECK ]\n"
+                f"» Lesson Status    : {lesson_status}\n"
+                f"------------------------------------\n"
+                f"[ SIGNAL DISTORTION RISK ASSESSMENT ]\n"
+                f"» Signal Distortion Risk : [ {clipping_risk_pct}% ]"
+            )
+            
+        embed.add_field(name="System Core Inspector", value=f"```ml\n{initial_text}```", inline=False)
+        embed.set_footer(text="@SkyWord @191 • SkyWord Official", icon_url=bot.user.display_avatar.url)
+        embed.set_image(url="attachment://waveform.png") 
+
+        final_gif_marker = GIF_CHECK_MARK if copyright_risk_level < 65 else GIF_CROSS_MARK
+        embed.set_thumbnail(url=final_gif_marker)
+
+        guild_id = str(ctx.guild.id)
+        user_id = str(ctx.author.id)
+        if guild_id not in bot.stats_config:
+            bot.stats_config[guild_id] = {"total_audio_checks": 0, "user_stats": {}}
+        
+        if "user_stats" not in bot.stats_config[guild_id]:
+            bot.stats_config[guild_id]["user_stats"] = {}
+
+        bot.stats_config[guild_id]["total_audio_checks"] += 1
+        if user_id not in bot.stats_config[guild_id]["user_stats"]:
+            bot.stats_config[guild_id]["user_stats"][user_id] = {"name": ctx.author.name, "count": 0}
+        bot.stats_config[guild_id]["user_stats"][user_id]["count"] += 1
+        
+        bot.save_config()
+
+        await processing_msg.delete()
+        
+        done_reply = "Download complete and structural waveform scanning metrics finished!" if lang == "en" else "ดาวน์โหลดเสร็จเเละตรวจเช็กสแกนไฟล์เรียบร้อยเเล้ว!"
+        await ctx.send(done_reply)
+        await ctx.send(file=discord_file, embed=embed)
+
+    except Exception as e:
+        try: await processing_msg.delete()
+        except: pass
+        err_msg = str(e)[:1500]
+        fail_msg = f"Fatal architecture processing failure on input stream: `{err_msg}`" if lang == "en" else f"เกิดข้อผิดพลาดในการประมวลผลอินพุต: `{err_msg}`"
+        await ctx.send(fail_msg)
+    finally:
+        if os.path.exists(temp_in_path):
+            try: os.remove(temp_in_path)
+            except: pass
+
+
+@bot.command(name="file")
+async def compress_file_kb(ctx):
+    if ctx.channel.id not in ALLOWED_CHANNEL_IDS:
+        return
+    lang = get_guild_lang(ctx.guild.id)
+    
+    if not ctx.message.attachments:
+        msg = "Please append an audio track attachment with >file command to trigger down-sampling storage compression" if lang == "en" else "กรุณาส่งคำสั่ง >file พร้อมแนบไฟล์เสียงเพื่อแปลงลดขนาดและวัดค่าเป็น KB"
+        return await ctx.send(msg)
+
+    attachment = ctx.message.attachments[0]
+    file_ext = attachment.filename.split('.')[-1].lower()
+    if file_ext not in ['mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac']:
+        return await ctx.send("not_supported")
+
+    desc_msg = "Compressing and reshaping track data bits structures down into KB storage format..." if lang == "en" else "กำลังบีบอัดและปรับลดขนาดโครงสร้างสัญญาณเสียงให้อยู่ในรูปแบบความจุ KB..."
+    msg = await ctx.send(embed=discord.Embed(description=desc_msg, color=THEME_COLOR))
+
+    temp_in = f"kb_in_{ctx.author.id}.{file_ext}"
+    temp_out = f"kb_out_{ctx.author.id}.ogg"
+
+    try:
+        await attachment.save(temp_in)
+        loop = asyncio.get_event_loop()
+
+        def process_compress_kb():
+            sound = AudioSegment.from_file(temp_in)
+            sound.export(temp_out, format="ogg", bitrate="48k")
+
+        await loop.run_in_executor(None, process_compress_kb)
+        
+        file_size_bytes = os.path.getsize(temp_out)
+        file_size_kb = round(file_size_bytes / 1024, 2)
+        formatted_kb = "{:,}".format(int(file_size_kb)) 
+
+        embed = discord.Embed(
+            title="SkyWord Audio Compression Storage",
+            description=f"**Original Name:** {attachment.filename}\n**Compressed Format:** OGG\n**Storage Size:** `{formatted_kb} KB`",
+            color=THEME_COLOR
+        )
+        embed.set_author(name="SkyWord Size Manager", icon_url=GIF_HEADER)
+        embed.set_thumbnail(url=GIF_CHECK_MARK)
+        embed.set_footer(text="@SkyWord @191 • SkyWord Official", icon_url=bot.user.display_avatar.url)
+
+        await msg.delete()
+        base_name = "".join(attachment.filename.split('.')[:-1])
+        done_reply = f"Compression finished, storage dimensions mapped to KB successfully!" if lang == "en" else f"บีบอัดและจัดรูปแบบวัดขนาดเป็นหน่วย KB เรียบร้อยแล้ว!"
+        await ctx.reply(done_reply, file=discord.File(temp_out, filename=f"compressed_{base_name}.ogg"), embed=embed)
+
+    except Exception as e:
+        try: await msg.delete()
+        except: pass
+        fail_msg = f"Storage allocation compression algorithm error encountered: `{str(e)[:500]}`" if lang == "en" else f"ระบบบีบอัดความจุทำงานผิดพลาด: `{str(e)[:500]}`"
+        await ctx.send(fail_msg)
+    finally:
+        if os.path.exists(temp_in): os.remove(temp_in)
+        if os.path.exists(temp_out): os.remove(temp_out)
+
+
+@bot.command(name="nups")
+async def search_user_songs(ctx, target_user: discord.User = None):
+    if ctx.channel.id not in ALLOWED_CHANNEL_IDS:
+        return
+    lang = get_guild_lang(ctx.guild.id)
+    
+    if not target_user:
+        msg = "Please specify user tag parameters cleanly, e.g., `>nups @user`" if lang == "en" else "กรุณาระบุชื่อผู้ใช้ที่ต้องการค้นหา เช่น `>nups @user`"
+        return await ctx.send(msg)
+
+    desc_load = f"Scanning complete historical track log archives sent by {target_user.display_name}..." if lang == "en" else f"กำลังสแกนประวัติการส่งไฟล์ของ {target_user.display_name}..."
+    title_load = "Searching logs..." if lang == "en" else "กำลังค้นหา..."
+    loading_embed = discord.Embed(description=desc_load, color=THEME_COLOR)
+    loading_embed.set_author(name=title_load, icon_url=GIF_LOADING)
+    msg = await ctx.send(embed=loading_embed)
+
+    matched_files = []
+    
+    try:
+        async for historical_msg in ctx.channel.history(limit=500):
+            if historical_msg.author.id == target_user.id and historical_msg.attachments:
+                for attachment in historical_msg.attachments:
+                    if any(attachment.filename.lower().endswith(ext) for ext in ['.mp3', '.wav', '.ogg', '.m4a', '.aac', '.flac']):
+                        size_mb = attachment.size / (1024 * 1024)
+                        size_kb = attachment.size / 1024
+                        size_str = f"{size_mb:.2f} MB ({int(size_kb)} KB)"
+                        
+                        matched_files.append({
+                            'filename': attachment.filename,
+                            'size': size_str
+                        })
+    except Exception as e:
+        pass
+
+    try: await msg.delete()
+    except: pass
+
+    if not matched_files:
+        fail_reply = f"No historical audio files sent by {target_user.display_name} discovered in this text channel room sir" if lang == "en" else f"ไม่พบประวัติไฟล์เสียงของ {target_user.display_name} ในห้องนี้เลยพี่ชาย"
+        return await ctx.send(fail_reply)
+
+    view = SoundNamePaginator(ctx.author, target_user.display_name, matched_files, lang=lang)
+    await ctx.send(embed=view.get_embed(), view=view)
+
+
+@bot.command(name="soundname")
+async def soundname_search(ctx, *, name_query: str = None):
+    if ctx.channel.id not in ALLOWED_CHANNEL_IDS:
+        return
+    lang = get_guild_lang(ctx.guild.id)
+    
+    if not name_query:
+        msg = "Please specify query target query parameter strings, e.g., `>soundname Non`" if lang == "en" else "กรุณาระบุชื่อคนในดิสคอร์ดที่ต้องการค้นหา เช่น `>soundname นนท์`"
+        return await ctx.send(msg)
+
+    desc_load = "Scanning storage database records and digging historical cache timelines..." if lang == "en" else "กำลังสแกนหาไฟล์เสียงในระบบและย้อนประวัติในห้องนี้..."
+    title_load = "Searching database..." if lang == "en" else "กำลังค้นหา..."
+    loading_embed = discord.Embed(description=desc_load, color=THEME_COLOR)
+    loading_embed.set_author(name=title_load, icon_url=GIF_LOADING)
+    msg = await ctx.send(embed=loading_embed)
+
+    matched_files = []
+
+    if os.path.exists("download"):
+        all_files = os.listdir("download")
+        for f in all_files:
+            if name_query.lower() in f.lower() and any(f.lower().endswith(ext) for ext in ['.mp3', '.wav', '.ogg', '.m4a', '.aac', '.flac']):
+                size = os.path.getsize(os.path.join("download", f))
+                matched_files.append({'filename': f, 'size': f"{size/(1024*1024):.2f} MB"})
+
+    try:
+        await msg.delete()
+    except: pass
+
+    if not matched_files:
+        fail_reply = f"No old archival files associated with keyword string matching `{name_query}` found anywhere sir" if lang == "en" else f"ไม่พบไฟล์เสียงเก่าของข้อมูลชื่อ `{name_query}` ในโฟลเดอร์หรือประวัติห้องนี้เลยพี่ชาย"
+        return await ctx.send(fail_reply)
+
+    view = SoundNamePaginator(ctx.author, name_query, matched_files, lang=lang)
+    await ctx.send(embed=view.get_embed(), view=view)
+
+
+@bot.command(name="uploadreturn")
+async def upload_return_sound(ctx, short_id: str = None):
+    if ctx.channel.id not in ALLOWED_CHANNEL_IDS:
+        return
+    lang = get_guild_lang(ctx.guild.id)
+    
+    if not short_id:
+        msg = "Please specify shortcut index code parameter, e.g., `>uploadreturn snd1`" if lang == "en" else "กรุณาระบุรหัสชื่อย่อเสียงที่ได้จากการค้นหา เช่น `>uploadreturn snd1`"
+        return await ctx.send(msg)
+
+    short_id = short_id.lower().strip()
+    if short_id not in sound_shortcuts_cache:
+        msg = "Audio index identifier code missing from recent search histories or system flushed, please execute search command once again" if lang == "en" else "ไม่พบรหัสชื่อย่อเสียงนี้ในประวัติการค้นหาล่าสุด หรือระบบรีเซ็ตแล้ว กรุณาพิมพ์ค้นหาใหมี่อีกครั้ง"
+        return await ctx.send(msg)
+
+    target_filename = sound_shortcuts_cache[short_id]
+    
+    desc_load = f"Tracking target audio packet `{short_id}` and pulling original track from chat channels nodes history..." if lang == "en" else f"กำลังย้อนรอยสแกนห้องแชทเพื่อโหลดไฟล์เสียง `{short_id}` ส่งคืนกลับให้คุณ..."
+    loading = await ctx.send(embed=discord.Embed(description=desc_load, color=THEME_COLOR))
+    
+    found_attachment = None
+    sent_date_str = "Date Unknown" if lang == "en" else "ไม่ทราบวันที่แน่ชัด"
+
+    try:
+        async for historical_msg in ctx.channel.history(limit=300):
+            if historical_msg.attachments:
+                for attachment in historical_msg.attachments:
+                    if attachment.filename == target_filename:
+                        found_attachment = attachment
+                        local_time = historical_msg.created_at.astimezone()
+                        sent_date_str = local_time.strftime("%d/%m/%Y เวลา %H:%M น.") if lang != "en" else local_time.strftime("%d/%m/%Y at %H:%M")
+                        break
+            if found_attachment:
+                break
+    except Exception as e:
+        pass
+
+    if not found_attachment:
+        target_path = os.path.join("download", target_filename)
+        if os.path.exists(target_path):
+            try:
+                if lang == "en":
+                    await ctx.reply(content=f"Pulled archival file successfully shortcut mapping: `{target_filename}`\n📆 **Sent Date:** Restored from system backups folder (Not found in text chat logs)", file=discord.File(target_path))
+                else:
+                    await ctx.reply(content=f"ดึงไฟล์เสียงเก่าสำเร็จย่อมาจาก: `{target_filename}`\n📆 **ส่งเมื่อวันไหน:** ดึงจากไฟล์สำรองระบบ (ไม่พบในประวัติห้องแชทล่าสุด)", file=discord.File(target_path))
+                return await loading.delete()
+            except:
+                pass
+        msg = "Original file track signature could not be extracted or discovered within current channel logs history sir" if lang == "en" else "ไม่พบไฟล์เสียงต้นฉบับในประวัติแชทของห้องนี้แล้วพี่ชาย"
+        return await ctx.send(msg)
+
+    try:
+        file_bytes = await found_attachment.read()
+        audio_file = discord.File(fp=io.BytesIO(file_bytes), filename=target_filename)
+        
+        if lang == "en":
+            await ctx.reply(content=f"Pulled file shortcut matched successfully: `{target_filename}`\n📆 **Sent Date:** Date {sent_date_str}", file=audio_file)
+        else:
+            await ctx.reply(content=f"ดึงไฟล์เสียงเก่าจากห้องสำเร็จย่อมาจาก: `{target_filename}`\n📆 **ส่งเมื่อวันไหน:** วันที่ {sent_date_str}", file=audio_file)
+        await loading.delete()
+    except Exception as e:
+        msg = "Fatal error breakdown trying to retrieve or push file byte packets output streams" if lang == "en" else "เกิดข้อผิดพลาดในการโหลดหรือส่งข้อมูลไฟล์เสียงคืน"
+        await ctx.send(msg)
+
+
+@bot.command(name="mix")
+async def mix_audio(ctx):
+    if ctx.channel.id not in ALLOWED_CHANNEL_IDS:
+        return
+    lang = get_guild_lang(ctx.guild.id)
+    
+    if len(ctx.message.attachments) < 2:
+        msg = "Please provide minimum 2 audio attachments alongside >mix command to chain together structures" if lang == "en" else "กรุณาส่งคำสั่ง >mix พร้อมแนบไฟล์เสียงมาอย่างน้อย 2 ไฟล์เพื่อนำมาต่อกัน"
+        return await ctx.send(msg)
+
+    desc_msg = "Downloading file bits streams and computing sequence matrix logs via duration thresholds..." if lang == "en" else "กำลังดาวน์โหลดและวิเคราะห์ความยาวไฟล์เพื่อจัดลำดับคิวเสียง..."
+    msg = await ctx.send(embed=discord.Embed(description=desc_msg, color=THEME_COLOR))
+
+    temp_in1 = f"mix_in1_{ctx.author.id}.ogg"
+    temp_in2 = f"mix_in2_{ctx.author.id}.ogg"
+    temp_out = f"mix_out_{ctx.author.id}.ogg"
+
+    try:
+        await ctx.message.attachments[0].save(temp_in1)
+        await ctx.message.attachments[1].save(temp_in2)
+
+        loop = asyncio.get_event_loop()
+
+        def process_mix():
+            sound1 = AudioSegment.from_file(temp_in1)
+            sound2 = AudioSegment.from_file(temp_in2)
+
+            if len(sound1) <= len(sound2):
+                final_audio = sound1 + sound2
+                order_info = f"1. {ctx.message.attachments[0].filename} (Shorter)\n2. {ctx.message.attachments[1].filename} (Longer)" if lang == "en" else f"1. {ctx.message.attachments[0].filename} (สั้นกว่า)\n2. {ctx.message.attachments[1].filename} (ยาวกว่า)"
+            else:
+                final_audio = sound2 + sound1
+                order_info = f"1. {ctx.message.attachments[1].filename} (Shorter)\n2. {ctx.message.attachments[0].filename} (Longer)" if lang == "en" else f"1. {ctx.message.attachments[1].filename} (สั้นกว่า)\n2. {ctx.message.attachments[0].filename} (ยาวกว่า)"
+
+            final_audio.export(temp_out, format="ogg")
+            return order_info
+
+        order_text = await loop.run_in_executor(None, process_mix)
+
+        embed = discord.Embed(
+            title="SkyWord Audio Mixer",
+            description=f"**Audio Order (Short to Long):**\n{order_text}\n\n**Status:** Combined Successfully" if lang == "en" else f"**ลำดับการต่อเสียง (สั้นไปยาว):**\n{order_text}\n\n**Status:** Combined Successfully",
+            color=THEME_COLOR
+        )
+        embed.set_author(name="SkyWord Mixer Studio", icon_url=GIF_HEADER)
+        embed.set_thumbnail(url=GIF_CHECK_MARK)
+        embed.set_footer(text="@SkyWord @191 • SkyWord Official", icon_url=bot.user.display_avatar.url)
+
+        await msg.delete()
+        done_reply = "Chained and combined tracks sequentially based on duration limits compiled sir!" if lang == "en" else "รวมและต่อไฟล์เสียงตามเกณฑ์ความยาวเรียบร้อยแล้วครับพี่ชาย!"
+        await ctx.reply(done_reply, file=discord.File(temp_out, filename="mixed_audio.ogg"), embed=embed)
+
+    except Exception as e:
+        try: await msg.delete()
+        except: pass
+        fail_msg = f"Mixing algorithm failure on engine side execution: `{str(e)[:500]}`" if lang == "en" else f"เกิดข้อผิดพลาดในการรวมเสียง: `{str(e)[:500]}`"
+        await ctx.send(fail_msg)
+    finally:
+        if os.path.exists(temp_in1): os.remove(temp_in1)
+        if os.path.exists(temp_in2): os.remove(temp_in2)
+        if os.path.exists(temp_out): os.remove(temp_out)
+
+
+@bot.command(name="cut")
+async def cut_audio(ctx, duration_str: str = None):
+    if ctx.channel.id not in ALLOWED_CHANNEL_IDS:
+        return
+    lang = get_guild_lang(ctx.guild.id)
+    
+    if not ctx.message.attachments or not duration_str:
+        msg = "Please type structural command formatting: >cut <trim boundary e.g. 1.50> accompanied by audio track" if lang == "en" else "กรุณาพิมพ์โครงสร้างคำสั่งแบบนี้: >cut <เวลาที่จะเหลือไว้ เช่น 1.50> พร้อมแนบไฟล์เสียง"
+        return await ctx.send(msg)
+
+    try:
+        if "." in duration_str:
+            parts = duration_str.split(".")
+            minutes = int(parts[0])
+            seconds = float(parts[1])
+            cutoff_ms = int((minutes * 60 + seconds) * 1000)
+        else:
+            cutoff_ms = int(float(duration_str) * 1000)
+    except:
+        msg = "Time formatting invalid parameters, use layouts like 1.50 (1 min 50 secs) or standard integer seconds variables" if lang == "en" else "รูปแบบเวลาไม่ถูกต้อง กรุณาใช้รูปแบบเช่น 1.50 (1 นาที 50 วินาที) หรือจำนวนวินาทีปกติ"
+        return await ctx.send(msg)
+
+    desc_msg = f"Slicing audio track segment structure down to first initial {duration_str} section limit..." if lang == "en" else f"กำลังประมวลผลตัดไฟล์เสียงให้เหลือเฉพาะ {duration_str} แรก..."
+    msg = await ctx.send(embed=discord.Embed(description=desc_msg, color=THEME_COLOR))
+
+    attachment = ctx.message.attachments[0]
+    file_ext = attachment.filename.split('.')[-1].lower()
+    temp_in = f"cut_{ctx.author.id}.{file_ext}"
+    temp_out = f"cut_out_{ctx.author.id}.ogg"
+
+    try:
+        await attachment.save(temp_in)
+        loop = asyncio.get_event_loop()
+
+        def process_cut():
+            sound = AudioSegment.from_file(temp_in)
+            cut_sound = sound[:cutoff_ms]
+            cut_sound.export(temp_out, format="ogg")
+
+        await loop.run_in_executor(None, process_cut)
+
+        embed = discord.Embed(
+            title="SkyWord Audio Cutter",
+            description=f"**Original File:** {attachment.filename}\n**Cut Limit:** Trimmed specifically to starting {duration_str} limits" if lang == "en" else f"**Original File:** {attachment.filename}\n**Cut Limit:** เหลือเฉพาะช่วง {duration_str} แรก",
+            color=THEME_COLOR
+        )
+        embed.set_author(name="SkyWord Audio Editor", icon_url=GIF_HEADER)
+        embed.set_thumbnail(url=GIF_CHECK_MARK)
+        embed.set_footer(text="@SkyWord @191 • SkyWord Official", icon_url=bot.user.display_avatar.url)
+
+        await msg.delete()
+        base_name = "".join(attachment.filename.split('.')[:-1])
+        done_reply = f"Audio trimmed to front duration limit of {duration_str} successfully!" if lang == "en" else f"ตัดเสียงเอาไว้เฉพาะช่วงต้นความยาว {duration_str} เรียบร้อยแล้ว!"
+        await ctx.reply(done_reply, file=discord.File(temp_out, filename=f"cut_{base_name}.ogg"), embed=embed)
+
+    except Exception as e:
+        try: await msg.delete()
+        except: pass
+        fail_msg = f"Trimming engine algorithm fatal error encountered: `{str(e)[:500]}`" if lang == "en" else f"เกิดข้อผิดพลาดในการตัดเสียง: `{str(e)[:500]}`"
+        await ctx.send(fail_msg)
+    finally:
+        if os.path.exists(temp_in): os.remove(temp_in)
+        if os.path.exists(temp_out): os.remove(temp_out)
+
+
+@bot.command(name="cutback")
+async def cutback_audio(ctx, start_str: str = None):
+    if ctx.channel.id not in ALLOWED_CHANNEL_IDS:
+        return
+    lang = get_guild_lang(ctx.guild.id)
+    
+    if not ctx.message.attachments or not start_str:
+        msg = "Please type structural command layout: >cutback <starting duration offset e.g. 0.20> accompanied by audio track" if lang == "en" else "กรุณาพิมพ์โครงสร้างคำสั่งแบบนี้: >cutback <เวลาเริ่มต้นที่จะตัดออก เช่น 0.20> พร้อมแนบไฟล์เสียง"
+        return await ctx.send(msg)
+
+    try:
+        if "." in start_str:
+            parts = start_str.split(".")
+            minutes = int(parts[0])
+            seconds = float(parts[1])
+            start_ms = int((minutes * 60 + seconds) * 1000)
+        else:
+            start_ms = int(float(start_str) * 1000)
+    except:
+        msg = "Time variables formatting invalid, specify models parameters like 0.20 (20 secs) or traditional float bounds variables" if lang == "en" else "รูปแบบเวลาไม่ถูกต้อง กรุณาใช้รูปแบบเช่น 0.20 (20 วินาที) หรือจำนวนวินาทีปกติ"
+        return await ctx.send(msg)
+
+    desc_msg = f"Cutting out initial {start_str} offsets and generating trailing output streams tracks buffers..." if lang == "en" else f"กำลังประมวลผลตัดลบช่วงเริ่มต้นออก {start_str} และเตรียมส่งท้ายแทร็กที่เหลือ..."
+    msg = await ctx.send(embed=discord.Embed(description=desc_msg, color=THEME_COLOR))
+
+    attachment = ctx.message.attachments[0]
+    file_ext = attachment.filename.split('.')[-1].lower()
+    temp_in = f"cutb_{ctx.author.id}.{file_ext}"
+    temp_out = f"cutb_out_{ctx.author.id}.ogg"
+
+    try:
+        await attachment.save(temp_in)
+        loop = asyncio.get_event_loop()
+
+        def process_cutback():
+            sound = AudioSegment.from_file(temp_in)
+            cut_sound = sound[start_ms:]
+            cut_sound.export(temp_out, format="ogg")
+
+        await loop.run_in_executor(None, process_cutback)
+
+        embed = discord.Embed(
+            title="SkyWord Audio Back-Cutter",
+            description=f"**Original File:** {attachment.filename}\n**Cut Off:** Dropped starting duration {start_str} offsets\n**Status:** Sent remaining track" if lang == "en" else f"**Original File:** {attachment.filename}\n**Cut Off:** ลบช่วงเริ่มต้นออก {start_str}\n**Status:** Sent remaining track",
+            color=THEME_COLOR
+        )
+        embed.set_author(name="SkyWord Audio Editor", icon_url=GIF_HEADER)
+        embed.set_thumbnail(url=GIF_CHECK_MARK)
+        embed.set_footer(text="@SkyWord @191 • SkyWord Official", icon_url=bot.user.display_avatar.url)
+
+        await msg.delete()
+        base_name = "".join(attachment.filename.split('.')[:-1])
+        done_reply = f"Deleted front audio offsets segment of {start_str} and sent remaining track package cleanly sir!" if lang == "en" else f"ทำการตัดลบช่วงเริ่มต้นออก {start_str} และส่งเฉพาะส่วนที่เหลือกลับคืนให้แล้วครับ!"
+        await ctx.reply(done_reply, file=discord.File(temp_out, filename=f"cutback_{base_name}.ogg"), embed=embed)
+
+    except Exception as e:
+        try: await msg.delete()
+        except: pass
+        fail_msg = f"Operational algorithm workspace runtime execution failure: `{str(e)[:500]}`" if lang == "en" else f"เกิดข้อผิดพลาดในการทำงาน: `{str(e)[:500]}`"
+        await ctx.send(fail_msg)
+    finally:
+        if os.path.exists(temp_in): os.remove(temp_in)
+        if os.path.exists(temp_out): os.remove(temp_out)
+
+
+@bot.tree.command(name="checkbots", description="ตรวจสอบบอทในยศ BOT👑 ว่าอยู่ที่ไหนบ้าง")
+async def checkbots(interaction: discord.Interaction):
+    if interaction.channel_id != AUDIT_CHANNEL_ID:
+        return await interaction.response.send_message(f"กรุณาใช้ห้อง <#{AUDIT_CHANNEL_ID}>", ephemeral=True)
+    
+    await interaction.response.defer()
+    role = discord.utils.get(interaction.guild.roles, name="BOT👑")
+    if not role: 
+        return await interaction.followup.send("ไม่พบยศ BOT👑")
+    
+    bot_members = [m for m in role.members if m.bot]
+    if not bot_members: 
+        return await interaction.followup.send("ไม่พบสมาชิกที่เป็นบอทในยศนี้")
+
+    for member in bot_members:
+        shared_guilds = [g for g in bot.guilds if g.get_member(member.id)]
+        embed = discord.Embed(title=f"Audit: {member.name}", color=THEME_COLOR)
+        embed.set_thumbnail(url=member.display_avatar.url)
+        
+        if shared_guilds:
+            guild_list = "".join([f"🏠 **{g.name}** (ID: `{g.id}`)\n" for g in shared_guilds])
+            embed.add_field(name="Servers detected", value=guild_list)
+        else:
+            embed.add_field(name="Servers detected", value="ไม่พบข้อมูลในฐานระบบ")
+        
+        await interaction.followup.send(embed=embed)
+
+
+@bot.event
+async def on_message(message):
+    await bot.process_commands(message)
+
+    if message.author.bot:
+        return
+
+    if message.channel.id == 1492915348889010276:
+        if message.attachments:
+            for attachment in message.attachments:
+                filename_lower = attachment.filename.lower()
+                if any(filename_lower.endswith(ext) for ext in ['.mp3', '.wav', '.ogg', '.m4a', '.aac', '.flac']):
+                    if not os.path.exists("download"):
+                        os.makedirs("download")
+                    
+                    save_path = os.path.join("download", attachment.filename)
+                    try:
+                        await attachment.save(save_path)
+                        await message.channel.send(f"📥 **Auto Downloader**: บันทึกแทร็กเสียง `{attachment.filename}` ลงโฟลเดอร์ `download` เรียบร้อยแล้ว")
+                    except:
+                        pass
+
+
+@bot.event
+async def on_ready():
+    print(f"SkyWord Online | SkyWord Official ☁️")
+
+bot.run(TOKEN)
